@@ -88,7 +88,7 @@ Important project files:
 - `pyproject.toml` / `uv.lock` — Python 3.14 project and CPU-only PyTorch source configuration.
 - `.python-version` — Python 3.14.
 
-There are no known specs, ADRs, issues, or commits to reference. Service unit files are deployed outside the repository; see the paths below.
+There are no known specs, ADRs, or issues to reference. Exact copies of the deployed service definitions are tracked under `deploy/systemd/`.
 
 ## Steam Deck platform
 
@@ -168,6 +168,14 @@ User lingering is enabled for `deck`. Three user services are enabled:
 /home/deck/.config/systemd/user/libby-ollama.service
 /home/deck/.config/systemd/user/libby-api.service
 /home/deck/.config/systemd/user/libby-face.service
+```
+
+Repository copies:
+
+```text
+deploy/systemd/libby-ollama.service
+deploy/systemd/libby-api.service
+deploy/systemd/libby-face.service
 ```
 
 Inspect rather than recreating them from memory:

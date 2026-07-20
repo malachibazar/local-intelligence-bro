@@ -1,0 +1,17 @@
+[Unit]
+Description=Libby fullscreen face
+Requires=libby-api.service
+After=graphical-session.target libby-api.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/flatpak kill org.chromium.Chromium
+ExecStartPre=/usr/bin/curl --retry 60 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1:8001/health
+ExecStart=/usr/bin/flatpak run org.chromium.Chromium --kiosk --no-first-run --disable-session-crashed-bubble --disable-infobars --disable-features=Translate --autoplay-policy=no-user-gesture-required --use-fake-ui-for-media-stream --ozone-platform=wayland --user-data-dir=/home/deck/.var/app/org.chromium.Chromium/config/libby-kiosk http://127.0.0.1:8001/
+ExecStopPost=-/usr/bin/flatpak kill org.chromium.Chromium
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

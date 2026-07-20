@@ -1,0 +1,17 @@
+[Unit]
+Description=Libby Ollama server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=OLLAMA_VULKAN=1
+Environment=OLLAMA_IGPU_ENABLE=1
+Environment=OLLAMA_MODELS=/home/deck/.ollama/models
+Environment=LD_LIBRARY_PATH=/home/deck/.local/ollama/lib/ollama
+ExecStart=/usr/bin/distrobox enter libby -- /home/deck/.local/ollama/bin/ollama serve
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
