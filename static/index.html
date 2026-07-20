@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Libby</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-rounded, "Segoe UI", sans-serif;
+      background: #000;
+      color: #f8b8dc;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    button {
+      border: 0;
+      color: inherit;
+      font: inherit;
+    }
+
+    #stage {
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      align-items: center;
+      padding: clamp(18px, 4vw, 44px);
+      background:
+        radial-gradient(circle at 50% 45%, rgba(255, 111, 181, 0.11), transparent 45%),
+        #000;
+    }
+
+    #face {
+      appearance: none;
+      width: min(78vw, 700px);
+      aspect-ratio: 1.35;
+      margin: auto;
+      padding: 3vh 5vw;
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      place-items: center;
+      background: transparent;
+      cursor: pointer;
+      touch-action: manipulation;
+      filter: drop-shadow(0 0 28px rgba(255, 99, 176, 0.24));
+    }
+
+    #eyes {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-inline: 7%;
+    }
+
+    .eye, #mouth {
+      display: block;
+      min-width: 1em;
+      text-align: center;
+      line-height: 1;
+      font-family: "DejaVu Sans", "Noto Sans Symbols 2", sans-serif;
+      text-shadow: 0 0 20px rgba(255, 111, 181, 0.55);
+      transition: transform 150ms ease, opacity 150ms ease;
+    }
+
+    .eye { font-size: clamp(82px, 18vw, 190px); }
+    #mouth { font-size: clamp(92px, 20vw, 210px); }
+
+    #stage[data-state="listening"] #face {
+      animation: listening-pulse 1.1s ease-in-out infinite;
+    }
+
+    #stage[data-state="thinking"] .eye:first-child {
+      animation: think-left 1.6s ease-in-out infinite;
+    }
+
+    #stage[data-state="thinking"] .eye:last-child {
+      animation: think-right 1.6s ease-in-out infinite;
+    }
+
+    #stage[data-state="speaking"] #mouth {
+      animation: speaking-bob 280ms ease-in-out infinite alternate;
+    }
+
+    #stage[data-state="happy"] #face {
+      animation: happy-bounce 480ms ease-out 1;
+    }
+
+    #status-area {
+      min-height: 72px;
+      display: grid;
+      gap: 7px;
+      place-items: center;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #caption {
+      max-width: min(900px, 92vw);
+      min-height: 1.35em;
+      color: #fff;
+      font-size: clamp(17px, 2.5vw, 28px);
+      line-height: 1.3;
+      opacity: 0.9;
+    }
+
+    #status {
+      color: #bd7fa0;
+      font-size: clamp(13px, 1.7vw, 18px);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    @keyframes listening-pulse {
+      0%, 100% { transform: scale(1); filter: drop-shadow(0 0 24px rgba(255, 99, 176, 0.24)); }
+      50% { transform: scale(1.025); filter: drop-shadow(0 0 42px rgba(255, 99, 176, 0.5)); }
+    }
+
+    @keyframes think-left { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+    @keyframes think-right { 0%, 100% { transform: translateY(-10px); } 50% { transform: translateY(0); } }
+    @keyframes speaking-bob { from { transform: scaleY(0.75); } to { transform: scaleY(1.14); } }
+    @keyframes happy-bounce { 0% { transform: scale(1); } 45% { transform: scale(1.08); } 100% { transform: scale(1); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      #stage *, #face { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main id="stage" data-state="idle">
+    <button id="face" type="button" aria-label="Talk to Libby">
+      <span id="eyes" aria-hidden="true">
+        <span id="left-eye" class="eye">●</span>
+        <span id="right-eye" class="eye">●</span>
+      </span>
+      <span id="mouth" aria-hidden="true">⌣</span>
+    </button>
+    <section id="status-area" aria-live="polite">
+      <div id="caption"></div>
+      <div id="status">Tap Libby or press Space to talk</div>
+    </section>
+  </main>
+
+  <script>
+    const SAMPLE_RATE = 16000;
+    const THREAD_ID = "deck-face";
+    const MAX_RECORDING_MS = 12000;
+    const faces = {
+      idle: ["●", "●", "⌣"],
+      listening: ["◉", "◉", "○"],
+      thinking: ["◔", "◕", "·"],
+      speaking: ["^", "^", "◡"],
+      happy: ["⌒", "⌒", "▽"],
+      error: ["×", "×", "︵"],
+    };
+
+    const stage = document.querySelector("#stage");
+    const faceButton = document.querySelector("#face");
+    const leftEye = document.querySelector("#left-eye");
+    const rightEye = document.querySelector("#right-eye");
+    const mouth = document.querySelector("#mouth");
+    const caption = document.querySelector("#caption");
+    const status = document.querySelector("#status");
+
+    let socket;
+    let reconnectTimer;
+    let audioContext;
+    let mediaStream;
+    let mediaSource;
+    let recorder;
+    let silentGain;
+    let recording = false;
+    let inputId = null;
+    let pendingStop = false;
+    let recordingTimer;
+    let activeTurnId = null;
+    let pendingBargeIn = false;
+    let outputSampleRate = 24000;
+    let playbackHead = 0;
+    let playbackSources = new Set();
+    let expressionTimer;
+    let responseText = "";
+
+    function setFace(state, message) {
+      const expression = faces[state] || faces.idle;
+      stage.dataset.state = state;
+      leftEye.textContent = expression[0];
+      rightEye.textContent = expression[1];
+      mouth.textContent = expression[2];
+      if (message !== undefined) status.textContent = message;
+      clearInterval(expressionTimer);
+      expressionTimer = undefined;
+
+      if (state === "speaking") {
+        const mouths = ["◡", "○", "—", "◡"];
+        let index = 0;
+        expressionTimer = setInterval(() => {
+          mouth.textContent = mouths[index++ % mouths.length];
+        }, 170);
+      } else if (state === "thinking") {
+        const mouths = ["·", "…", "·"];
+        let index = 0;
+        expressionTimer = setInterval(() => {
+          mouth.textContent = mouths[index++ % mouths.length];
+        }, 520);
+      }
+    }
+
+    function connectSocket() {
+      clearTimeout(reconnectTimer);
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${protocol}://${location.host}/ws/chat`);
+      socket.binaryType = "arraybuffer";
+
+      socket.addEventListener("open", () => {
+        if (!recording && !activeTurnId) setFace("idle", "Tap Libby or press Space to talk");
+      });
+
+      socket.addEventListener("message", async (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          queueAudio(event.data);
+          return;
+        }
+
+        const message = JSON.parse(event.data);
+        handleEvent(message);
+      });
+
+      socket.addEventListener("close", () => {
+        setFace("error", "Reconnecting…");
+        reconnectTimer = setTimeout(connectSocket, 1200);
+      });
+
+      socket.addEventListener("error", () => socket.close());
+    }
+
+    function handleEvent(event) {
+      switch (event.type) {
+        case "audio.input.ready":
+          inputId = event.input_id;
+          if (pendingStop) finishRecording();
+          break;
+        case "transcription.started":
+          activeTurnId = event.turn_id;
+          setFace("thinking", "Listening to what you said…");
+          break;
+        case "transcript":
+          caption.textContent = `You: ${event.text}`;
+          setFace("thinking", "Thinking…");
+          break;
+        case "turn.started":
+          activeTurnId = event.turn_id;
+          responseText = "";
+          setFace("thinking", "Thinking…");
+          break;
+        case "assistant.delta":
+          responseText += event.text;
+          caption.textContent = responseText;
+          break;
+        case "audio.synthesizing":
+          setFace("thinking", "Finding my voice…");
+          break;
+        case "audio.started":
+          outputSampleRate = event.sample_rate;
+          playbackHead = Math.max(playbackHead, getAudioContext().currentTime + 0.035);
+          setFace("speaking", "Speaking — tap to interrupt");
+          break;
+        case "audio.completed":
+          break;
+        case "turn.completed":
+          activeTurnId = null;
+          finishFaceAfterPlayback();
+          break;
+        case "turn.cancelled":
+          activeTurnId = null;
+          stopPlayback();
+          if (pendingBargeIn) {
+            pendingBargeIn = false;
+            startRecording();
+          } else {
+            setFace("idle", "Tap Libby or press Space to talk");
+          }
+          break;
+        case "error":
+          activeTurnId = null;
+          pendingBargeIn = false;
+          setFace("error", event.message || "Something went wrong");
+          setTimeout(() => setFace("idle", "Tap Libby or press Space to talk"), 2200);
+          break;
+      }
+    }
+
+    function getAudioContext() {
+      if (!audioContext) {
+        audioContext = new AudioContext({ latencyHint: "interactive" });
+      }
+      if (audioContext.state === "suspended") audioContext.resume();
+      return audioContext;
+    }
+
+    async function startRecording() {
+      if (recording || socket.readyState !== WebSocket.OPEN) return;
+      const context = getAudioContext();
+      stopPlayback();
+      caption.textContent = "";
+      inputId = null;
+      pendingStop = false;
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+      } catch (error) {
+        setFace("error", "Microphone permission is required");
+        return;
+      }
+
+      mediaSource = context.createMediaStreamSource(mediaStream);
+      recorder = context.createScriptProcessor(2048, 1, 1);
+      silentGain = context.createGain();
+      silentGain.gain.value = 0;
+      recorder.onaudioprocess = ({ inputBuffer }) => {
+        if (!recording || !inputId || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(resampleToPcm16(inputBuffer.getChannelData(0), context.sampleRate));
+      };
+      mediaSource.connect(recorder);
+      recorder.connect(silentGain);
+      silentGain.connect(context.destination);
+
+      recording = true;
+      setFace("listening", "Listening — tap when finished");
+      socket.send(JSON.stringify({
+        type: "audio.input.start",
+        thread_id: THREAD_ID,
+        output_audio: true,
+        encoding: "pcm_s16le",
+        sample_rate: SAMPLE_RATE,
+        channels: 1,
+      }));
+      recordingTimer = setTimeout(stopRecording, MAX_RECORDING_MS);
+    }
+
+    function stopRecording() {
+      if (!recording) return;
+      recording = false;
+      clearTimeout(recordingTimer);
+      recorder?.disconnect();
+      mediaSource?.disconnect();
+      silentGain?.disconnect();
+      mediaStream?.getTracks().forEach((track) => track.stop());
+      recorder = undefined;
+      mediaSource = undefined;
+      silentGain = undefined;
+      mediaStream = undefined;
+
+      if (!inputId) {
+        pendingStop = true;
+        setFace("thinking", "Finishing recording…");
+        return;
+      }
+      finishRecording();
+    }
+
+    function finishRecording() {
+      pendingStop = false;
+      setFace("thinking", "Transcribing…");
+      socket.send(JSON.stringify({ type: "audio.input.stop", input_id: inputId }));
+      inputId = null;
+    }
+
+    function resampleToPcm16(input, inputRate) {
+      const ratio = inputRate / SAMPLE_RATE;
+      const outputLength = Math.max(1, Math.floor(input.length / ratio));
+      const output = new ArrayBuffer(outputLength * 2);
+      const view = new DataView(output);
+
+      for (let index = 0; index < outputLength; index++) {
+        const start = Math.floor(index * ratio);
+        const end = Math.max(start + 1, Math.min(input.length, Math.floor((index + 1) * ratio)));
+        let sum = 0;
+        for (let sampleIndex = start; sampleIndex < end; sampleIndex++) sum += input[sampleIndex];
+        const sample = Math.max(-1, Math.min(1, sum / (end - start)));
+        view.setInt16(index * 2, sample < 0 ? sample * 32768 : sample * 32767, true);
+      }
+      return output;
+    }
+
+    function queueAudio(arrayBuffer) {
+      const context = getAudioContext();
+      const pcm = new Int16Array(arrayBuffer);
+      const buffer = context.createBuffer(1, pcm.length, outputSampleRate);
+      const channel = buffer.getChannelData(0);
+      for (let index = 0; index < pcm.length; index++) channel[index] = pcm[index] / 32768;
+
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(context.destination);
+      const startAt = Math.max(playbackHead, context.currentTime + 0.025);
+      source.start(startAt);
+      playbackHead = startAt + buffer.duration;
+      playbackSources.add(source);
+      source.addEventListener("ended", () => playbackSources.delete(source), { once: true });
+    }
+
+    function stopPlayback() {
+      playbackSources.forEach((source) => {
+        try { source.stop(); } catch (_) {}
+      });
+      playbackSources.clear();
+      playbackHead = getAudioContext().currentTime;
+    }
+
+    function finishFaceAfterPlayback() {
+      const context = getAudioContext();
+      const delay = Math.max(0, (playbackHead - context.currentTime) * 1000);
+      setTimeout(() => {
+        if (activeTurnId || recording) return;
+        setFace("happy", "Ready");
+        setTimeout(() => {
+          if (!activeTurnId && !recording) setFace("idle", "Tap Libby or press Space to talk");
+        }, 850);
+      }, delay);
+    }
+
+    async function interact() {
+      if (document.fullscreenEnabled && !document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+      getAudioContext();
+
+      if (recording) {
+        stopRecording();
+      } else if (activeTurnId) {
+        pendingBargeIn = true;
+        socket.send(JSON.stringify({ type: "turn.cancel", turn_id: activeTurnId }));
+      } else {
+        startRecording();
+      }
+    }
+
+    faceButton.addEventListener("click", interact);
+    document.addEventListener("keydown", (event) => {
+      if (event.code === "Space" && !event.repeat) {
+        event.preventDefault();
+        interact();
+      }
+    });
+
+    connectSocket();
+  </script>
+</body>
+</html>
